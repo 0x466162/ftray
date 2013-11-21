@@ -1,6 +1,3 @@
-/*
- * $Id: ftray.c,v 1.4 2013/08/31 12:55:16 fab Exp $
- */
 #include <X11/Xlib-xcb.h>
 #include <xcb/xcb_atom.h>
 #include <xcb/xcb_event.h>
@@ -17,9 +14,11 @@ char *get_atom_name(xcb_atom_t);
 
 Display 		*display;
 xcb_connection_t	*conn;
+xcb_window_t		 bar_id;
+xcb_pixmap_t		 bar_buffer;
 xcb_screen_t		*screen;
 volatile sig_atomic_t    running = 1;
-
+unsigned int		 mapped = 0;
 enum {
 	_NET_SYSTEM_TRAY_OPCODE,
 	_XEMBED,
@@ -37,28 +36,6 @@ struct ewmh_hint {
 	{"XEMBED_EMBEDDED_NOTIFY", XCB_ATOM_NONE},
 };
 
-struct stray_icons {
-	int	w;
-	int	h;
-	int	p;
-};
-
-struct swm_geometry {
-	int	x;
-	int	y;
-	int	w;
-	int	h;
-};
-
-struct swm_stray {
-	xcb_window_t		id;
-	xcb_pixmap_t		buffer;
-	struct swm_geometry	g;
-	struct stray_icons	i;
-	unsigned int		clients;
-};
-
-struct swm_stray *stray = malloc(sizeof(struct swm_stray));
 
 void
 clientmessage(xcb_client_message_event_t *e)
@@ -66,7 +43,6 @@ clientmessage(xcb_client_message_event_t *e)
 	Window tray_icon;
 	uint32_t cid, values[2];
 	char *name;
-	int offset;
 	unsigned long xembed_info[2];
 	name = get_atom_name(e->type);
 	cid = e->data.data32[2];
@@ -79,13 +55,10 @@ clientmessage(xcb_client_message_event_t *e)
 		    e->format == 32))
 		return;
 
-	offset = (stray->g.w - stray->i.w - stray->clients) *
-	    (stray->i.w + stray->i.p);
+	xcb_reparent_window(conn, cid, bar_id, (1920 - 16) - mapped * 18, 0);
 
-	xcb_reparent_window(conn, cid, stray->id, offset, 0);
-
-	values[0] = stray->i.w;
-	values[1] = stray->i.h;
+	values[0] = 16;
+	values[1] = 16;
 	xcb_configure_window(conn, cid,
 	    XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
 	    values);
@@ -99,12 +72,12 @@ clientmessage(xcb_client_message_event_t *e)
 	ev->format = 32;
 	ev->data.data32[0] = XCB_CURRENT_TIME;
 	ev->data.data32[1] = ewmh[XEMBED_EMBEDDED_NOTIFY].atom;
-	ev->data.data32[2] = stray->id;
+	ev->data.data32[2] = bar_id;
 	ev->data.data32[3] = 1;
 	xcb_send_event(conn, 0, cid, XCB_EVENT_MASK_NO_EVENT, (char*)e);
 	xcb_change_save_set(conn, XCB_SET_MODE_INSERT, cid);
 	xcb_map_window(conn, cid);
-	stray->clients++;
+	mapped++;
 	xcb_flush(conn);
 
 }
@@ -144,7 +117,6 @@ get_atom_name(xcb_atom_t atom)
 int
 main(void)
 {
-	struct swm_stray			*stray;
 	char 					 atomname[strlen("_NET_SYSTEM_TRAY_S") + 11];
 	char             			*title = "Hello World !";
 	uint32_t				 wa[2], buf[32];
@@ -157,30 +129,21 @@ main(void)
 	    (xcb_client_message_event_t*)buf;
 	xcb_generic_event_t			*evt;
 
-
 	conn = xcb_connect(NULL, NULL);
-	printf("generating id\n");
-	stray->id = xcb_generate_id(conn);
+	bar_id = xcb_generate_id(conn);
 	screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
-
-	printf("Setting up icon size and spacing\n");
-	stray->clients = 0;
-	printf("Setting up icon size and spacing\n");
-	stray->i.w = 8;
-	printf("Setting up icon size and spacing\n");
-	stray->i.p = 2;
-	printf("Setting up icon size and spacing done\n");
 	
 	wa[0] = screen->white_pixel;
 	wa[1] = 1;
-	printf("Creating the window\n");
-	xcb_create_window(conn, 0, stray->id,
-	    screen->root, 0, 784, 1280, 16, 0,
+	xcb_create_window(conn, 0, bar_id,
+	    screen->root, 0, 1184, 1920, 16, 0,
 	    XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
 	    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT, wa);
 
-	printf("Mapping the window\n");
-	xcb_map_window(conn, stray->id);
+	 xcb_change_property (conn, XCB_PROP_MODE_REPLACE, bar_id, WM_NAME,
+	     STRING, 8, strlen (title), title);
+
+	xcb_map_window(conn, bar_id);
 
 	/* System Tray Stuff */
 	snprintf(atomname, strlen("_NET_SYSTEM_TRAY_S") + 11,
@@ -188,14 +151,14 @@ main(void)
 	stc = xcb_intern_atom(conn, 0, strlen(atomname), atomname);
 	if(!(bar_rpy = xcb_intern_atom_reply(conn, stc, NULL)))
 		errx(1, "could not get atom %s\n", atomname);
-	xcb_set_selection_owner(conn,stray->id,bar_rpy->atom, XCB_CURRENT_TIME);
+	xcb_set_selection_owner(conn,bar_id,bar_rpy->atom, XCB_CURRENT_TIME);
 	gsoc = xcb_get_selection_owner(conn, bar_rpy->atom);
 	if (!(gso_rpy = xcb_get_selection_owner_reply(conn, gsoc,
 			    NULL)))
 		errx(1, "could not get selection owner for %s\n",
 		    atomname);
 
-	if (gso_rpy->owner != stray->id) {
+	if (gso_rpy->owner != bar_id) {
 		warnx("Another system tray running?\n");
 		free(gso_rpy);
 		return(1);
@@ -210,7 +173,7 @@ main(void)
 	ev->format		= 32;
 	ev->data.data32[0]	= XCB_CURRENT_TIME;
 	ev->data.data32[1]	= bar_rpy->atom;
-	ev->data.data32[2]	= stray->id;
+	ev->data.data32[2]	= bar_id;
 	xcb_send_event(conn, 0, screen->root, 0xFFFFFF, (char *)buf);
 
 	xcb_flush(conn);
