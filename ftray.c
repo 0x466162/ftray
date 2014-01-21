@@ -140,8 +140,8 @@ main(void)
 	    XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
 	    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT, wa);
 
-	 xcb_change_property (conn, XCB_PROP_MODE_REPLACE, bar_id, WM_NAME,
-	     STRING, 8, strlen (title), title);
+	 xcb_change_property (conn, XCB_PROP_MODE_REPLACE, bar_id, XCB_ATOM_WM_NAME,
+	     XCB_ATOM_STRING, 8, strlen (title), title);
 
 	xcb_map_window(conn, bar_id);
 
