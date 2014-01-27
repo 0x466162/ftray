@@ -17,6 +17,7 @@ xcb_connection_t	*conn;
 xcb_window_t		 bar_id;
 xcb_pixmap_t		 bar_buffer;
 xcb_screen_t		*screen;
+uint16_t		wpx, hpx;
 volatile sig_atomic_t    running = 1;
 unsigned int		 mapped = 0;
 enum {
@@ -55,7 +56,7 @@ clientmessage(xcb_client_message_event_t *e)
 		    e->format == 32))
 		return;
 
-	xcb_reparent_window(conn, cid, bar_id, (1920 - 16) - mapped * 18, 0);
+	xcb_reparent_window(conn, cid, bar_id, (wpx - 16) - mapped * 18, 0);
 
 	values[0] = 16;
 	values[1] = 16;
@@ -132,11 +133,14 @@ main(void)
 	conn = xcb_connect(NULL, NULL);
 	bar_id = xcb_generate_id(conn);
 	screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
+
+	wpx = screen->width_in_pixels;
+	hpx = screen->height_in_pixels;
 	
 	wa[0] = screen->white_pixel;
 	wa[1] = 1;
 	xcb_create_window(conn, 0, bar_id,
-	    screen->root, 0, 1184, 1920, 16, 0,
+	    screen->root, 0, hpx - 16, wpx, 16, 0,
 	    XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
 	    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT, wa);
 
@@ -177,6 +181,8 @@ main(void)
 	xcb_send_event(conn, 0, screen->root, 0xFFFFFF, (char *)buf);
 
 	xcb_flush(conn);
+
+	printf("wxh: %ux%u\n",wpx,hpx);
 
 	while (running) {
 		sleep(1);
