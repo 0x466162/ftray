@@ -144,7 +144,26 @@ get_atom_name(xcb_atom_t atom)
 void
 unmapnotify(xcb_unmap_notify_event_t *e)
 {
-	mapped--;
+	struct mapped_clients	*t_client;
+	uint32_t		 cid;
+	unsigned int		 mappings;
+	
+	/*
+	 * activate the following as soon as update_systray() works
+	 *cid = e->window;
+	 */
+	cid = 0;
+	mappings = 0;
+	TAILQ_FOREACH(t_client, &mapped_clients_head, entries) {
+		if (t_client->cid == cid) {
+			TAILQ_REMOVE(&mapped_clients_head, t_client,
+			    entries);
+			continue;
+		}
+		mappings++;
+	}
+
+	printf("%d clients left\n",mappings);
 }
 
 
