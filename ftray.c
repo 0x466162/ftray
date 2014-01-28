@@ -1,7 +1,9 @@
 #include <X11/Xlib-xcb.h>
 #include <xcb/xcb_atom.h>
 #include <xcb/xcb_event.h>
-#include <unistd.h>
+#include <X11/extensions/Xrandr.h>
+#include <xcb/randr.h>
+#include <time.h>
 #include <string.h>
 #include <err.h>
 #include <stdlib.h>
@@ -10,6 +12,7 @@
 #define SYSTEM_TRAY_REQUEST_DOCK 0
 
 void clientmessage(xcb_client_message_event_t *);
+void event_handle(xcb_generic_event_t *);
 char *get_atom_name(xcb_atom_t);
 
 Display 		*display;
@@ -17,7 +20,8 @@ xcb_connection_t	*conn;
 xcb_window_t		 bar_id;
 xcb_pixmap_t		 bar_buffer;
 xcb_screen_t		*screen;
-uint16_t		wpx, hpx;
+uint16_t		 wpx, hpx;
+int			 xrandr_eventbase;
 volatile sig_atomic_t    running = 1;
 unsigned int		 mapped = 0;
 enum {
@@ -115,6 +119,25 @@ get_atom_name(xcb_atom_t atom)
         return (name);
 }
 
+
+void
+event_handle(xcb_generic_event_t *evt)
+{
+	uint8_t type = XCB_EVENT_RESPONSE_TYPE(evt);
+
+			printf("Event type %s(%u)\n",
+			    xcb_event_get_label(type),
+			    type);
+	switch(type){
+#define EVENT(type, callback) case type: callback((void *)evt); return
+	EVENT(XCB_CLIENT_MESSAGE, clientmessage);
+#undef EVENT
+	}
+	if (type - xrandr_eventbase == XCB_RANDR_SCREEN_CHANGE_NOTIFY) {
+		printf("jackpot\n");
+	}
+}
+
 int
 main(void)
 {
@@ -129,6 +152,9 @@ main(void)
 	xcb_client_message_event_t		*ev =
 	    (xcb_client_message_event_t*)buf;
 	xcb_generic_event_t			*evt;
+	xcb_randr_query_version_cookie_t	 c;
+	xcb_randr_query_version_reply_t		*r;
+	const xcb_query_extension_reply_t	*qep;
 
 	conn = xcb_connect(NULL, NULL);
 	bar_id = xcb_generate_id(conn);
@@ -180,23 +206,27 @@ main(void)
 	ev->data.data32[2]	= bar_id;
 	xcb_send_event(conn, 0, screen->root, 0xFFFFFF, (char *)buf);
 
-	xcb_flush(conn);
+	/* initial Xrandr setup */
+	qep = xcb_get_extension_data(conn, &xcb_randr_id);
+	if (qep->present) {
+		c = xcb_randr_query_version(conn, 1, 1);
+		r = xcb_randr_query_version_reply(conn, c, NULL);
+		if (r) {
+			if (r->major_version >=1) {
+				xrandr_eventbase = qep->first_event;
+				printf("XRandR supported\n");
+			}
+			free(r);
+		}
+	}
 
-	printf("wxh: %ux%u\n",wpx,hpx);
+	printf("wxh: %ux%u\n",screen->width_in_pixels,screen->height_in_pixels);
 
 	while (running) {
-		sleep(1);
-		while ((evt = xcb_poll_for_event(conn))) {
-			//printf("      Pad0 %u\n",evt->pad0);
-			//printf("  Sequence %u\n",evt->sequence);
-			//printf("    Pad[7] %u\n",evt->pad[7]);
-			//printf(" Full Seq. %u\n",evt->full_sequence);
-			if (evt->response_type == 161) {
-				printf("Event type %s(%u)\n",
-				    xcb_event_get_label(XCB_EVENT_RESPONSE_TYPE(evt)),
-				    evt->response_type);
-				clientmessage((void *)evt);
-			}
+		nanosleep((struct timespec[]){{0, 500000000}}, NULL);
+		xcb_aux_sync(conn);
+		while ((evt = xcb_wait_for_event(conn))) {
+			event_handle(evt);
 			free(evt);
 		}
 	}
