@@ -8,6 +8,7 @@
 #include <err.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <sys/queue.h>
 
 #define SYSTEM_TRAY_REQUEST_DOCK 0
 
@@ -31,6 +32,12 @@ enum {
 	XEMBED_EMBEDDED_NOTIFY,
 };
 
+struct mapped_clients {
+	uint32_t	cid;
+	TAILQ_ENTRY(mapped_clients) entries;
+};
+TAILQ_HEAD(, mapped_clients) mapped_clients_head;
+
 struct ewmh_hint {
 	char		*name;
 	xcb_atom_t	 atom;
@@ -45,14 +52,25 @@ struct ewmh_hint {
 void
 clientmessage(xcb_client_message_event_t *e)
 {
-	Window tray_icon;
-	uint32_t cid, values[2];
-	char *name;
-	unsigned long xembed_info[2];
+	Window			 tray_icon;
+	uint32_t		 values[2];
+	char 			*name;
+	unsigned long 		 xembed_info[2];
+	struct mapped_clients	*t_client, *t_clients;
+	unsigned int		 mapping;
+
+	mapping = 0;
+	t_client = malloc(sizeof(*t_client));
+	if (!TAILQ_EMPTY(&mapped_clients_head)) {
+		TAILQ_FOREACH(t_clients, &mapped_clients_head, entries)
+		    printf("tray client: 0x%x\n",t_clients->cid);
+		    mapping++;
+	}
+
 	name = get_atom_name(e->type);
-	cid = e->data.data32[2];
+	t_client->cid = e->data.data32[2];
 	printf("clientmessage: window: 0x%x, atom: %s(%u), client 0x%x\n",
-	    e->window, name, e->type, cid);
+	    e->window, name, e->type, t_client->cid);
 	free(name);
 
 	if (! e->data.data32[1] == SYSTEM_TRAY_REQUEST_DOCK &&
@@ -60,31 +78,35 @@ clientmessage(xcb_client_message_event_t *e)
 		    e->format == 32))
 		return;
 
-	xcb_reparent_window(conn, cid, bar_id, (wpx - 16) - mapped * 18, 0);
+	xcb_reparent_window(conn, t_client->cid, bar_id, (wpx - 16) -
+	    mapping * 18, 0);
 
+	/*
+	 * following block should be an own function
+	 * update_systray()
+	 */
 	values[0] = 16;
 	values[1] = 16;
-	xcb_configure_window(conn, cid,
+	xcb_configure_window(conn, t_client->cid,
 	    XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
 	    values);
-
 	uint32_t buf[32];
 	xcb_client_message_event_t		*ev =
 	    (xcb_client_message_event_t*)buf;
 	ev->response_type = XCB_CLIENT_MESSAGE;
-	ev->window = cid;
+	ev->window = t_client->cid;
 	ev->type = ewmh[_XEMBED].atom;
 	ev->format = 32;
 	ev->data.data32[0] = XCB_CURRENT_TIME;
 	ev->data.data32[1] = ewmh[XEMBED_EMBEDDED_NOTIFY].atom;
 	ev->data.data32[2] = bar_id;
 	ev->data.data32[3] = 1;
-	xcb_send_event(conn, 0, cid, XCB_EVENT_MASK_NO_EVENT, (char*)e);
-	xcb_change_save_set(conn, XCB_SET_MODE_INSERT, cid);
-	xcb_map_window(conn, cid);
-	mapped++;
+	xcb_send_event(conn, 0, t_client->cid, XCB_EVENT_MASK_NO_EVENT, (char*)e);
+	xcb_change_save_set(conn, XCB_SET_MODE_INSERT, t_client->cid);
+	xcb_map_window(conn, t_client->cid);
 	xcb_flush(conn);
 
+	TAILQ_INSERT_TAIL(&mapped_clients_head, t_client, entries);
 }
 
 char *
@@ -119,23 +141,29 @@ get_atom_name(xcb_atom_t atom)
         return (name);
 }
 
+void
+unmapnotify(xcb_unmap_notify_event_t *e)
+{
+	mapped--;
+}
+
 
 void
 event_handle(xcb_generic_event_t *evt)
 {
 	uint8_t type = XCB_EVENT_RESPONSE_TYPE(evt);
 
-			printf("Event type %s(%u)\n",
-			    xcb_event_get_label(type),
-			    type);
+	printf("Event type %s(%u)\n", xcb_event_get_label(type), type);
 	switch(type){
 #define EVENT(type, callback) case type: callback((void *)evt); return
 	EVENT(XCB_CLIENT_MESSAGE, clientmessage);
+	EVENT(XCB_UNMAP_NOTIFY, unmapnotify);
 #undef EVENT
 	}
 	if (type - xrandr_eventbase == XCB_RANDR_SCREEN_CHANGE_NOTIFY) {
 		printf("jackpot\n");
 	}
+	printf("Mapped clients %d\n", mapped);
 }
 
 int
@@ -143,7 +171,7 @@ main(void)
 {
 	char 					 atomname[strlen("_NET_SYSTEM_TRAY_S") + 11];
 	char             			*title = "Hello World !";
-	uint32_t				 wa[2], buf[32];
+	uint32_t				 wa[3], buf[32];
 	xcb_drawable_t				 bar;
 	xcb_intern_atom_cookie_t		 stc;
 	xcb_intern_atom_reply_t			*bar_rpy;
@@ -156,6 +184,8 @@ main(void)
 	xcb_randr_query_version_reply_t		*r;
 	const xcb_query_extension_reply_t	*qep;
 
+	TAILQ_INIT(&mapped_clients_head);
+
 	conn = xcb_connect(NULL, NULL);
 	bar_id = xcb_generate_id(conn);
 	screen = xcb_setup_roots_iterator(xcb_get_setup(conn)).data;
@@ -165,10 +195,12 @@ main(void)
 	
 	wa[0] = screen->white_pixel;
 	wa[1] = 1;
+	wa[2] = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
 	xcb_create_window(conn, 0, bar_id,
 	    screen->root, 0, hpx - 16, wpx, 16, 0,
 	    XCB_WINDOW_CLASS_INPUT_OUTPUT, screen->root_visual,
-	    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT, wa);
+	    XCB_CW_BACK_PIXEL | XCB_CW_OVERRIDE_REDIRECT |
+	    XCB_CW_EVENT_MASK, wa);
 
 	 xcb_change_property (conn, XCB_PROP_MODE_REPLACE, bar_id, XCB_ATOM_WM_NAME,
 	     XCB_ATOM_STRING, 8, strlen (title), title);
