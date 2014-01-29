@@ -14,6 +14,7 @@
 
 void clientmessage(xcb_client_message_event_t *);
 void event_handle(xcb_generic_event_t *);
+void update_systray(unsigned int, unsigned int);
 char *get_atom_name(xcb_atom_t);
 
 Display 		*display;
@@ -33,10 +34,11 @@ enum {
 };
 
 struct mapped_clients {
+	unsigned char	cidx;
 	uint32_t	cid;
 	TAILQ_ENTRY(mapped_clients) entries;
 };
-TAILQ_HEAD(, mapped_clients) mapped_clients_head;
+TAILQ_HEAD(foo, mapped_clients) mapped_clients_head;
 
 struct ewmh_hint {
 	char		*name;
@@ -52,23 +54,26 @@ struct ewmh_hint {
 void
 clientmessage(xcb_client_message_event_t *e)
 {
-	Window			 tray_icon;
-	uint32_t		 values[2];
+	uint32_t	values[2];
+	uint32_t	buf[32];
 	char 			*name;
 	unsigned long 		 xembed_info[2];
 	struct mapped_clients	*t_client, *t_clients;
-	unsigned int		 mapping;
+	unsigned char		 mapping;
 
+	t_clients = t_client = malloc(sizeof(*t_client));
 	mapping = 0;
-	t_client = malloc(sizeof(*t_client));
+
 	if (!TAILQ_EMPTY(&mapped_clients_head)) {
-		TAILQ_FOREACH(t_clients, &mapped_clients_head, entries)
-		    printf("tray client: 0x%x\n",t_clients->cid);
-		    mapping++;
+		t_clients = TAILQ_LAST(&mapped_clients_head, foo);
+		mapping = t_clients->cidx + 1;
 	}
+
+	printf("Mapped clients %d\n", mapping + 1);
 
 	name = get_atom_name(e->type);
 	t_client->cid = e->data.data32[2];
+	t_client->cidx = mapping;
 	printf("clientmessage: window: 0x%x, atom: %s(%u), client 0x%x\n",
 	    e->window, name, e->type, t_client->cid);
 	free(name);
@@ -78,19 +83,13 @@ clientmessage(xcb_client_message_event_t *e)
 		    e->format == 32))
 		return;
 
-	xcb_reparent_window(conn, t_client->cid, bar_id, (wpx - 16) -
-	    mapping * 18, 0);
+	update_systray(t_client->cid, mapping);
 
-	/*
-	 * following block should be an own function
-	 * update_systray()
-	 */
 	values[0] = 16;
 	values[1] = 16;
 	xcb_configure_window(conn, t_client->cid,
 	    XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT,
 	    values);
-	uint32_t buf[32];
 	xcb_client_message_event_t		*ev =
 	    (xcb_client_message_event_t*)buf;
 	ev->response_type = XCB_CLIENT_MESSAGE;
@@ -103,10 +102,18 @@ clientmessage(xcb_client_message_event_t *e)
 	ev->data.data32[3] = 1;
 	xcb_send_event(conn, 0, t_client->cid, XCB_EVENT_MASK_NO_EVENT, (char*)e);
 	xcb_change_save_set(conn, XCB_SET_MODE_INSERT, t_client->cid);
-	xcb_map_window(conn, t_client->cid);
-	xcb_flush(conn);
 
 	TAILQ_INSERT_TAIL(&mapped_clients_head, t_client, entries);
+}
+
+void
+update_systray(unsigned int cid, unsigned int slot)
+{
+	xcb_reparent_window(conn, cid, bar_id, (wpx - 16) -
+	    slot * 18, 0);
+
+	xcb_map_window(conn, cid);
+	xcb_flush(conn);
 }
 
 char *
@@ -146,21 +153,25 @@ unmapnotify(xcb_unmap_notify_event_t *e)
 {
 	struct mapped_clients	*t_client;
 	uint32_t		 cid;
-	unsigned int		 mappings;
+	int		 mappings;
+	char			 changed;
 	
-	/*
-	 * activate the following as soon as update_systray() works
-	 *cid = e->window;
-	 */
-	cid = 0;
+	cid = e->window;
+	changed = 0;
 	mappings = 0;
 	TAILQ_FOREACH(t_client, &mapped_clients_head, entries) {
 		if (t_client->cid == cid) {
 			TAILQ_REMOVE(&mapped_clients_head, t_client,
 			    entries);
-			continue;
+			changed = 1;
+		} else {
+			mappings++;
+			if (changed) {
+				t_client->cidx = mappings - 1;
+				update_systray(t_client->cid,
+				    t_client->cidx);
+			}
 		}
-		mappings++;
 	}
 
 	printf("%d clients left\n",mappings);
@@ -176,13 +187,12 @@ event_handle(xcb_generic_event_t *evt)
 	switch(type){
 #define EVENT(type, callback) case type: callback((void *)evt); return
 	EVENT(XCB_CLIENT_MESSAGE, clientmessage);
-	EVENT(XCB_UNMAP_NOTIFY, unmapnotify);
+	EVENT(XCB_DESTROY_NOTIFY, unmapnotify);
 #undef EVENT
 	}
 	if (type - xrandr_eventbase == XCB_RANDR_SCREEN_CHANGE_NOTIFY) {
 		printf("jackpot\n");
 	}
-	printf("Mapped clients %d\n", mapped);
 }
 
 int
