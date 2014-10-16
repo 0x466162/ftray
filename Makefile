@@ -2,7 +2,7 @@
 CC	?= gcc
 STRIP ?= strip
 CFLAGS += -std=c99 -fshort-wchar -Os -I${X11BASE}/include -I${X11BASE}/include/freetype2
-LDFLAGS += -L${X11BASE}/lib -lX11 -lX11-xcb -lxcb-aux -lxcb-icccm -lxcb-keysyms -lxcb-randr -lxcb-xtest -lXft -lXcursor
+LDFLAGS += -L${X11BASE}/lib -lX11 -lX11-xcb -lxcb-aux -lxcb-icccm -lxcb-keysyms -lxcb-randr -lxcb-xtest -lXft -lXcursor -lxcb-event
 CFDEBUG = -g3 -pedantic -Wall -Wunused-parameter -Wlong-long\
 		  -Wsign-conversion -Wconversion -Wimplicit-function-declaration
 
@@ -33,7 +33,7 @@ debug: CC += ${CFDEBUG}
 
 clean:
 	rm -rf ./obj/*.o
-	rm -rf ./${EXEC}
+	rm -rf ./obj/${EXEC}
 
 install: foo
 	test -d ${DESTDIR}${BINDIR} || mkdir -p ${DESTDIR}${BINDIR}

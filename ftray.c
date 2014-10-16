@@ -83,7 +83,6 @@ clientmessage(xcb_client_message_event_t *e)
 		    e->format == 32))
 		return;
 
-	update_systray(t_client->cid, mapping);
 
 	values[0] = 16;
 	values[1] = 16;
@@ -102,6 +101,7 @@ clientmessage(xcb_client_message_event_t *e)
 	ev->data.data32[3] = 1;
 	xcb_send_event(conn, 0, t_client->cid, XCB_EVENT_MASK_NO_EVENT, (char*)e);
 	xcb_change_save_set(conn, XCB_SET_MODE_INSERT, t_client->cid);
+	update_systray(t_client->cid, mapping);
 
 	TAILQ_INSERT_TAIL(&mapped_clients_head, t_client, entries);
 }
